@@ -61,7 +61,7 @@ async def handle_unexpected(request: Request, exc: Exception):
 # Public routes
 # --------------------------------------------------------------------------
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health() -> dict:
     return {
         "status": "ok",
@@ -70,7 +70,7 @@ def health() -> dict:
     }
 
 
-@app.get("/spec")
+@app.api_route("/spec", methods=["GET", "HEAD"])
 def spec() -> dict:
     return {
         "specVersion": config.SPEC_VERSION,
