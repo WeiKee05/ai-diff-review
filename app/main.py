@@ -19,6 +19,10 @@ from app import config
 from app.auth import require_bearer_token
 from app.errors import STATUS_TO_CODE, ApiError, envelope
 
+
+from app import cache
+
+
 logger = logging.getLogger("diffreview")
 
 _STARTED_AT = time.monotonic()
@@ -113,12 +117,33 @@ async def submit_review(request: Request) -> dict:
     if not parse_unified_diff(body.diff):
         raise ApiError(422, "invalid_diff", "Body could not be parsed as a unified diff.")
 
-    # 4. Accept, then process in the background.
+    # 4. Idempotency: same key + same body -> same job; different body -> 409.
+    provider = body.options.provider
+    key = cache.content_hash(body.diff, provider)
+    idem_key = request.headers.get("Idempotency-Key")
+
+    if idem_key:
+        existing = cache.lookup_idempotency(idem_key)
+        if existing is not None:
+            stored_hash, stored_job_id = existing
+            if stored_hash != key:
+                raise ApiError(
+                    409,
+                    "idempotency_conflict",
+                    "Idempotency-Key already used with a different body.",
+                )
+            prior = jobs.get_job(stored_job_id)
+            if prior is not None:
+                return {"jobId": prior.job_id, "status": prior.status}
+
     job = jobs.create_job(
         input_bytes=len(body.diff.encode("utf-8")),
         max_findings=body.options.maxFindings,
     )
-    asyncio.create_task(jobs.run_job(job, body.diff))
+    if idem_key:
+        cache.store_idempotency(idem_key, key, job.job_id)
+
+    asyncio.create_task(jobs.run_job(job, body.diff, key))
 
     return {"jobId": job.job_id, "status": "queued"}
 

@@ -16,6 +16,11 @@ from app import config
 from app.diff_parser import parse_unified_diff
 from app.rules import Finding, check_line, order_and_dedupe
 
+
+from app import cache
+from app.chunking import chunk_files
+
+
 Status = Literal["queued", "running", "done", "failed"]
 
 # Caps concurrent processing. Acquired inside the task, never in the endpoint,
@@ -67,32 +72,45 @@ def get_job(job_id: str) -> Job | None:
     return _jobs.get(job_id)
 
 
-def scan_diff(diff: str) -> list[Finding]:
-    """Pure, synchronous scan. No I/O, no shared state — safe in a thread."""
+def scan_diff(diff: str) -> tuple[list[Finding], int]:
+    """Scan via chunks. Returns (findings, chunk_count).
+
+    Chunking must not change the result, so findings are merged and ordered
+    once across all chunks.
+    """
+    files = parse_unified_diff(diff)
+    chunks = chunk_files(files)
+
     findings: list[Finding] = []
-    for parsed in parse_unified_diff(diff):
-        contents = [a.content for a in parsed.added_lines]
-        for index, added in enumerate(parsed.added_lines):
-            findings.extend(
-                check_line(
-                    path=parsed.path,
-                    line=added.line,
-                    content=added.content,
-                    following=contents[index + 1 :],
+    for chunk in chunks:
+        for parsed in chunk:
+            contents = [a.content for a in parsed.added_lines]
+            for index, added in enumerate(parsed.added_lines):
+                findings.extend(
+                    check_line(
+                        path=parsed.path,
+                        line=added.line,
+                        content=added.content,
+                        following=contents[index + 1 :],
+                    )
                 )
-            )
-    return order_and_dedupe(findings)
+
+    return order_and_dedupe(findings), max(len(chunks), 1)
 
 
-async def run_job(job: Job, diff: str) -> None:
+async def run_job(job: Job, diff: str, cache_key: str) -> None:
     """Background worker. Never raises: failure is recorded on the job."""
     async with _semaphore:
         job.status = "running"
         try:
-            # to_thread keeps CPU-bound scanning off the event loop, so other
-            # requests stay responsive and jobs genuinely interleave.
-            job.findings = await asyncio.to_thread(scan_diff, diff)
+            cached = cache.get_result(cache_key)
+            if cached is not None:
+                job.findings, job.chunks = cached
+                job.cache_hit = True
+            else:
+                job.findings, job.chunks = await asyncio.to_thread(scan_diff, diff)
+                cache.store_result(cache_key, job.findings, job.chunks)
             job.status = "done"
-        except Exception as exc:  # noqa: BLE001 - a job must never crash the app
+        except Exception as exc:  # noqa: BLE001
             job.status = "failed"
             job.error = f"Review failed: {type(exc).__name__}"
