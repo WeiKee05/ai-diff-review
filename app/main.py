@@ -23,6 +23,9 @@ from app.errors import STATUS_TO_CODE, ApiError, envelope
 from app import cache
 
 
+from fastapi.responses import StreamingResponse
+
+
 logger = logging.getLogger("diffreview")
 
 _STARTED_AT = time.monotonic()
@@ -154,6 +157,45 @@ def get_review(job_id: str) -> dict:
     if job is None:
         raise ApiError(404, "not_found", "No job with that id.")
     return job.to_dict()
+
+@v1.get("/reviews/{job_id}/stream")
+async def stream_review(job_id: str, request: Request):
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise ApiError(404, "not_found", "No job with that id.")
+
+    async def event_source():
+        """Replay is the default: both live and finished jobs read the same log.
+
+        Polling at 50ms rather than using an asyncio.Event — simpler, and the
+        latency is irrelevant against a 30s budget.
+        """
+        sent = 0
+        while True:
+            if await request.is_disconnected():
+                return
+
+            while sent < len(job.events):
+                entry = job.events[sent]
+                sent += 1
+                yield f"event: {entry['event']}\ndata: {json.dumps(entry['data'])}\n\n"
+                if entry["event"] == "done":
+                    return
+
+            if job.status in ("done", "failed") and sent >= len(job.events):
+                return
+
+            await asyncio.sleep(0.05)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # stop proxies buffering the stream
+        },
+    )
 
 
 app.include_router(v1)

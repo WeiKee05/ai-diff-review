@@ -35,6 +35,7 @@ class Job:
     job_id: str
     status: Status = "queued"
     findings: list[Finding] = field(default_factory=list)
+    events: list[dict] = field(default_factory=list)
     error: str | None = None
     input_bytes: int = 0
     chunks: int = 1
@@ -56,6 +57,17 @@ class Job:
         if self.status == "failed" and self.error:
             body["error"] = self.error
         return body
+
+    def record(self, event: str, data: dict) -> None:
+        """Append to the replayable event log."""
+        self.events.append({"event": event, "data": data})
+
+    def usage_dict(self) -> dict:
+        return {
+            "inputBytes": self.input_bytes,
+            "chunks": self.chunks,
+            "cacheHit": self.cache_hit,
+        }
 
 
 def create_job(input_bytes: int, max_findings: int) -> Job:
@@ -99,9 +111,13 @@ def scan_diff(diff: str) -> tuple[list[Finding], int]:
 
 
 async def run_job(job: Job, diff: str, cache_key: str) -> None:
-    """Background worker. Never raises: failure is recorded on the job."""
+    """Background worker. Records every event for replay. Never raises."""
+    job.record("status", {"status": "queued"})
+
     async with _semaphore:
         job.status = "running"
+        job.record("status", {"status": "running"})
+
         try:
             cached = cache.get_result(cache_key)
             if cached is not None:
@@ -110,7 +126,17 @@ async def run_job(job: Job, diff: str, cache_key: str) -> None:
             else:
                 job.findings, job.chunks = await asyncio.to_thread(scan_diff, diff)
                 cache.store_result(cache_key, job.findings, job.chunks)
+
+            visible = job.findings[: job.max_findings]
+            for finding in visible:
+                job.record("finding", finding.to_dict())
+
             job.status = "done"
+            job.record("status", {"status": "done"})
+            job.record("done", {"total": len(visible), "usage": job.usage_dict()})
+
         except Exception as exc:  # noqa: BLE001
             job.status = "failed"
             job.error = f"Review failed: {type(exc).__name__}"
+            job.record("status", {"status": "failed"})
+            job.record("done", {"total": 0, "usage": job.usage_dict(), "error": job.error})
