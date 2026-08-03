@@ -89,3 +89,18 @@
   cache = content-hashed, returns a NEW jobId with cacheHit: true
   idempotency = client-key-based, returns the SAME jobId; different body → 409
 - Both stores are in-memory dicts, so they share the single-worker constraint.
+
+
+## Step 9 — SSE with replay
+- Replay is the default, not a special case: every job keeps an events list
+  that run_job appends to. Live and replay viewers both just read that list —
+  live reads it while it's still growing, replay reads it once it's finished.
+- Poll the events list at 50ms rather than using an asyncio.Event. Simpler,
+  no missed-signal edge cases, and 50ms is irrelevant against a 30s budget.
+- Findings are recorded to the log before the terminal status/done events, so
+  a live viewer sees findings arrive, then completion — the natural order.
+- Auth works on this endpoint with zero extra code because it's a router-level
+  dependency (Step 3 decision), not middleware — which would have interfered
+  with streaming.
+- X-Accel-Buffering: no header added to stop any intermediate proxy (Render
+  sits behind Cloudflare) from buffering the whole stream before delivery.
