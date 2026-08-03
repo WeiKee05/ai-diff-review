@@ -57,3 +57,22 @@
   Accepted — the brief specifies "== null or != null" literally.
 - Ordering/dedup applied once over the whole collection, not per line, because
   chunking will produce findings in batches that need merging.
+
+
+## Step 6 — async job pipeline
+- In-memory dict for the job store. No durability requirement in the brief, and
+  a database is real setup cost for a guarantee nobody asked for. Consequence:
+  a restart loses jobs and cache. Must deploy with ONE uvicorn worker — two
+  workers means two dicts, and polling could hit the wrong one.
+- asyncio.create_task rather than BackgroundTasks: needed explicit control over
+  concurrency, which BackgroundTasks doesn't give.
+- Semaphore(4) acquired INSIDE the task, not in the endpoint. If it were in the
+  endpoint, a 5th submission would block waiting for a slot and break the
+  immediate-202 contract.
+- asyncio.to_thread for the scan: the rules engine is CPU-bound with no awaits,
+  so running it directly would block the event loop and make "concurrent" jobs
+  actually sequential.
+- Validation order: size (413) before JSON parse (400) before diff validity
+  (422). Checking size first avoids parsing a huge body just to reject it.
+- run_job catches everything and records failure on the job — a bad diff can
+  never crash the service.
