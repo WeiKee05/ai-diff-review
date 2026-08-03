@@ -21,6 +21,10 @@ from app import cache
 from app.chunking import chunk_files
 
 
+from app.providers import PROVIDERS, ProviderError
+from app.rules import Finding, order_and_dedupe
+
+
 Status = Literal["queued", "running", "done", "failed"]
 
 # Caps concurrent processing. Acquired inside the task, never in the endpoint,
@@ -84,33 +88,23 @@ def get_job(job_id: str) -> Job | None:
     return _jobs.get(job_id)
 
 
-def scan_diff(diff: str) -> tuple[list[Finding], int]:
-    """Scan via chunks. Returns (findings, chunk_count).
-
-    Chunking must not change the result, so findings are merged and ordered
-    once across all chunks.
-    """
+def scan_diff(diff: str, provider: str = "mock") -> tuple[list[Finding], int]:
+    """Scan via chunks using the named provider. Returns (findings, chunk_count)."""
     files = parse_unified_diff(diff)
     chunks = chunk_files(files)
 
+    analyse = PROVIDERS.get(provider)
+    if analyse is None:
+        raise ProviderError(f"Unknown provider: {provider}.")
+
     findings: list[Finding] = []
     for chunk in chunks:
-        for parsed in chunk:
-            contents = [a.content for a in parsed.added_lines]
-            for index, added in enumerate(parsed.added_lines):
-                findings.extend(
-                    check_line(
-                        path=parsed.path,
-                        line=added.line,
-                        content=added.content,
-                        following=contents[index + 1 :],
-                    )
-                )
+        findings.extend(analyse(chunk))
 
     return order_and_dedupe(findings), max(len(chunks), 1)
 
 
-async def run_job(job: Job, diff: str, cache_key: str) -> None:
+async def run_job(job: Job, diff: str, cache_key: str, provider: str = "mock") -> None:
     """Background worker. Records every event for replay. Never raises."""
     job.record("status", {"status": "queued"})
 
@@ -124,7 +118,9 @@ async def run_job(job: Job, diff: str, cache_key: str) -> None:
                 job.findings, job.chunks = cached
                 job.cache_hit = True
             else:
-                job.findings, job.chunks = await asyncio.to_thread(scan_diff, diff)
+                job.findings, job.chunks = await asyncio.to_thread(
+                    scan_diff, diff, provider
+                )
                 cache.store_result(cache_key, job.findings, job.chunks)
 
             visible = job.findings[: job.max_findings]
@@ -134,6 +130,12 @@ async def run_job(job: Job, diff: str, cache_key: str) -> None:
             job.status = "done"
             job.record("status", {"status": "done"})
             job.record("done", {"total": len(visible), "usage": job.usage_dict()})
+
+        except ProviderError as exc:
+            job.status = "failed"
+            job.error = str(exc)
+            job.record("status", {"status": "failed"})
+            job.record("done", {"total": 0, "usage": job.usage_dict(), "error": job.error})
 
         except Exception as exc:  # noqa: BLE001
             job.status = "failed"

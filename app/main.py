@@ -134,6 +134,9 @@ async def submit_review(request: Request) -> dict:
 
     # 4. Idempotency: same key + same body -> same job; different body -> 409.
     provider = body.options.provider
+    if provider not in config.PROVIDERS:
+        raise ApiError(422, "invalid_diff", f"Unknown provider: {provider}.")
+    
     key = cache.content_hash(body.diff, provider)
     idem_key = request.headers.get("Idempotency-Key")
 
@@ -158,7 +161,7 @@ async def submit_review(request: Request) -> dict:
     if idem_key:
         cache.store_idempotency(idem_key, key, job.job_id)
 
-    asyncio.create_task(jobs.run_job(job, body.diff, key))
+    asyncio.create_task(jobs.run_job(job, body.diff, key, provider))
 
     return {"jobId": job.job_id, "status": "queued"}
 

@@ -21,3 +21,8 @@ RATE_LIMIT_PER_MINUTE = 30
 # Burst capacity. Above the declared sustained rate so that 30 rapid
 # submissions all succeed, per the brief.
 RATE_LIMIT_BURST = 60
+
+
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
