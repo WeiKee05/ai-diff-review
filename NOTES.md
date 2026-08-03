@@ -76,3 +76,16 @@
   (422). Checking size first avoids parsing a huge body just to reject it.
 - run_job catches everything and records failure on the job — a bad diff can
   never crash the service.
+
+
+## Step 7 — chunking, caching, idempotency
+- Chunking is a correct partitioning, not an optimisation: findings are
+  identical either way (brief requires it). Greedy bin-pack over per-file
+  raw_text; a file over the limit becomes its own chunk.
+- Cache key = SHA-256 of {diff, provider}. maxFindings is deliberately EXCLUDED
+  — it truncates the ordered list on read, and usage must reflect the full
+  scan, so it's presentation not computation.
+- Caching and idempotency are separate mechanisms:
+  cache = content-hashed, returns a NEW jobId with cacheHit: true
+  idempotency = client-key-based, returns the SAME jobId; different body → 409
+- Both stores are in-memory dicts, so they share the single-worker constraint.
