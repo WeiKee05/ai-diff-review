@@ -41,3 +41,19 @@
 - ParsedFile keeps `raw_text` per file — needed on Day 3 for chunking on file
   boundaries. Deciding this now avoided a rewrite.
 - pytest.ini with `pythonpath = .` so tests import `app` without setup.
+
+
+## Step 5 — mock provider rules
+- One finding per rule per line: each rule is a yes/no question about the line,
+  not a count of occurrences. Confirmed by the id format (ruleId:path:line),
+  which couldn't distinguish two hits on the same line anyway.
+- MOCK-002 regex taken verbatim from the brief — it defines correctness, so
+  "improving" it would be diverging from the spec.
+- MOCK-003 requires all three conditions: string literal, SQL keyword inside it
+  (whole-word, so "deleted_at" doesn't fire), and a + outside any literal.
+- MOCK-004 only sees added lines. A catch whose body lies outside the diff is
+  treated as non-empty rather than guessed at. Documented limitation.
+- Known edge: MOCK-005's [=!]=\s*null also matches the == inside ===.
+  Accepted — the brief specifies "== null or != null" literally.
+- Ordering/dedup applied once over the whole collection, not per line, because
+  chunking will produce findings in batches that need merging.
