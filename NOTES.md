@@ -91,6 +91,35 @@
 - Both stores are in-memory dicts, so they share the single-worker constraint.
 
 
+## Step 8 — deployment to Render
+- Render free tier + UptimeRobot ping every 5 min. Render spins down free
+  services after 15 min idle with a ~60s cold start, which would blow the 30s
+  latency budget. The 5-min ping keeps it warm.
+- Single uvicorn worker, no --workers flag. The job store, cache, and
+  idempotency registry are all in-process dicts, so a second worker would mean
+  a second set — submit to worker A, poll worker B, get a 404. Render also
+  sets WEB_CONCURRENCY=1 by default on the free instance, but the start
+  command doesn't rely on that.
+- --host 0.0.0.0 --port $PORT: default 127.0.0.1 only accepts local
+  connections, so Render couldn't route to it. Port is assigned by Render.
+- render.yaml committed so config lives in the repo, not only in a dashboard.
+  API_TOKEN marked sync:false — entered manually in Render, never in git.
+- Deployed EARLY, before SSE and rate limiting were built. Deliberate: it
+  surfaced two bugs while there was still time to fix them calmly.
+
+### Bug 1: /health intercepted by the platform
+Set healthCheckPath: /health in render.yaml. Render handled that path itself
+and never forwarded it to the app, so GET /health returned a plain-text
+"Not Found" instead of our JSON — a contract violation. /spec worked fine,
+which is what isolated it. Removed healthCheckPath.
+
+### Bug 2: FastAPI GET routes don't answer HEAD
+UptimeRobot's default probe is HEAD, not GET, and it got 405. Raw Starlette
+routes registered for GET also answer HEAD; FastAPI's @app.get() does not.
+Fixed with @app.api_route("/health", methods=["GET", "HEAD"]), same for /spec.
+Found only because a real monitor probed it differently than curl did.
+
+
 ## Step 9 — SSE with replay
 - Replay is the default, not a special case: every job keeps an events list
   that run_job appends to. Live and replay viewers both just read that list —
