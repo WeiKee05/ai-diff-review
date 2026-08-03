@@ -3,6 +3,14 @@
 import logging
 import time
 
+import asyncio
+import json
+
+from app import jobs
+from app.diff_parser import parse_unified_diff
+from app.models import ReviewRequest
+
+
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -80,10 +88,47 @@ def spec() -> dict:
 v1 = APIRouter(prefix="/v1", dependencies=[Depends(require_bearer_token)])
 
 
-@v1.get("/ping")
-def ping() -> dict:
-    """TEMPORARY — proves auth works. Remove before submission."""
-    return {"pong": True}
+@v1.post("/reviews", status_code=202)
+async def submit_review(request: Request) -> dict:
+    # 1. Size first — before parsing, so a huge body is cheap to reject.
+    raw = await request.body()
+    if len(raw) > config.MAX_PAYLOAD_BYTES:
+        raise ApiError(413, "payload_too_large", "Diff exceeds the maximum payload size.")
+
+    # 2. JSON validity.
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise ApiError(400, "invalid_json", "Request body is not valid JSON.")
+
+    if not isinstance(payload, dict):
+        raise ApiError(400, "invalid_json", "Request body must be a JSON object.")
+
+    body = ReviewRequest.model_validate(payload)
+
+    # 3. Diff must be present, non-empty, and parseable.
+    if not body.diff or not body.diff.strip():
+        raise ApiError(422, "invalid_diff", "Field 'diff' is required and must not be empty.")
+
+    if not parse_unified_diff(body.diff):
+        raise ApiError(422, "invalid_diff", "Body could not be parsed as a unified diff.")
+
+    # 4. Accept, then process in the background.
+    job = jobs.create_job(
+        input_bytes=len(body.diff.encode("utf-8")),
+        max_findings=body.options.maxFindings,
+    )
+    asyncio.create_task(jobs.run_job(job, body.diff))
+
+    return {"jobId": job.job_id, "status": "queued"}
+
+
+@v1.get("/reviews/{job_id}")
+def get_review(job_id: str) -> dict:
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise ApiError(404, "not_found", "No job with that id.")
+    return job.to_dict()
 
 
 app.include_router(v1)
