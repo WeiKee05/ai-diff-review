@@ -104,3 +104,18 @@
   with streaming.
 - X-Accel-Buffering: no header added to stop any intermediate proxy (Render
   sits behind Cloudflare) from buffering the whole stream before delivery.
+
+
+## Step 10 — rate limiting
+- Token bucket, chosen because the brief has two separate requirements — a
+  sustained rate that must always succeed, and a burst ceiling — and a token
+  bucket has exactly two parameters mapping onto them.
+- Rejected fixed window (allows 2x the limit across a window boundary) and
+  sliding window (30 rapid requests then blocked for 59s, which fails
+  "sustained 30/min must succeed").
+- Refill 0.5 tokens/sec = 30/min declared. Capacity 60 for burst headroom.
+- Global bucket, not per-client: single-tenant service, one bearer token.
+  Per-key buckets would be the change for a multi-client service.
+- Limiter runs FIRST in the endpoint, before reading the body — no point
+  reading 1 MiB from a client we're about to reject.
+- GETs deliberately untouched: the limiter is only called in submit_review.
