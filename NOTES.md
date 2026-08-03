@@ -10,6 +10,7 @@
 ## AI tool usage
 - Claude Code installed but not used yet; step 2 is boilerplate only.
 
+
 ## Step 3 — auth and error envelope
 - Auth via router-level dependency on /v1, not middleware. Chose this because
   Starlette's BaseHTTPMiddleware complicates streaming responses, and an SSE
@@ -25,3 +26,18 @@
 - Four exception handlers (ApiError, StarletteHTTPException, RequestValidationError,
   bare Exception) so no error path can leak a non-envelope shape.
 - Limits live in config.py; /spec reads from there so declared limits can't drift.
+
+
+## Step 4 — diff parser
+- Hand-rolled rather than using the `unidiff` library: the parser is the thing
+  being evaluated, and I need per-file raw text preserved for chunking later.
+- Structure comes from hunk-header arithmetic (read exactly new_count body
+  lines), never from scanning content for `diff --git`. This is what makes
+  injected diff syntax inert — it's architectural, not a filter.
+- Line numbers: context and added lines advance the counter, removed lines
+  don't, because removed lines aren't in the new file.
+- Strip only the first character of a body line so indentation survives in
+  `evidence`.
+- ParsedFile keeps `raw_text` per file — needed on Day 3 for chunking on file
+  boundaries. Deciding this now avoided a rewrite.
+- pytest.ini with `pythonpath = .` so tests import `app` without setup.
