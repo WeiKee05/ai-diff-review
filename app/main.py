@@ -26,6 +26,9 @@ from app import cache
 from fastapi.responses import StreamingResponse
 
 
+from app import ratelimit
+
+
 logger = logging.getLogger("diffreview")
 
 _STARTED_AT = time.monotonic()
@@ -97,6 +100,15 @@ v1 = APIRouter(prefix="/v1", dependencies=[Depends(require_bearer_token)])
 
 @v1.post("/reviews", status_code=202)
 async def submit_review(request: Request) -> dict:
+    allowed, retry_after = ratelimit.try_acquire()
+    if not allowed:
+        raise ApiError(
+            429,
+            "rate_limited",
+            "Too many submissions. Retry shortly.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    
     # 1. Size first — before parsing, so a huge body is cheap to reject.
     raw = await request.body()
     if len(raw) > config.MAX_PAYLOAD_BYTES:

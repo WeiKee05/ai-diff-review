@@ -17,3 +17,7 @@ MAX_PAYLOAD_BYTES = 1_048_576
 CHUNK_BYTES = 65_536
 MAX_CONCURRENT_JOBS = 4
 RATE_LIMIT_PER_MINUTE = 30
+
+# Burst capacity. Above the declared sustained rate so that 30 rapid
+# submissions all succeed, per the brief.
+RATE_LIMIT_BURST = 60
