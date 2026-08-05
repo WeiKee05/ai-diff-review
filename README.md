@@ -8,8 +8,8 @@ Full architecture and design rationale: see [SUBMISSION.md](./SUBMISSION.md).
 
 ## Live service
 
-- **Base URL:** provided at submission
-- **Docs (interactive):** `<base-url>/docs`
+- **Base URL:** https://ai-diff-review-zx8m.onrender.com
+- **Docs (interactive):** https://ai-diff-review-zx8m.onrender.com/docs
 
 ## Running locally
 
