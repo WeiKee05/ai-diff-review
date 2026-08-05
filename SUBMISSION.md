@@ -105,7 +105,7 @@ both of which were only caught this way, not by local tests.
 
 ## AI tools used
 
-**Claude (this conversation)** — used for the large majority of the
+**Claude** — used for the large majority of the
 build. Design decisions (parser architecture, provider abstraction,
 rate-limiter algorithm, etc.) were worked out in conversation before any
 code was written, with reasoning and tradeoffs discussed explicitly.
